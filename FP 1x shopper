@@ -1,0 +1,45 @@
+----what % of retail and direct customers are 1 time shopper
+--ranks customers orders------------------------------------
+drop table ejm_fp_order_rank_1TIME if exists;
+create table ejm_fp_order_rank_1TIME as
+select
+        oh.iid,
+        oh.order_id,
+        oh.order_dt,
+        OH.ORDER_TIME,
+        RANK() OVER (PARTITION BY OH.IID ORDER BY OH.ORDER_DT,OH.order_time) AS ORDER_RANK
+from urbn_target..order_HEADER_v OH
+        JOIN (SELECT IDV.IID
+                FROM URBN_TARGET..INDIVIDUAL_DERIVED_VALUE_V IDV
+                WHERE IDV.BRAND_CD='UO' AND IDV.FIRST_ORDER_ANY_DT BETWEEN '2018-05-01' AND '2019-04-30'
+                AND IDV.FIRST_ORDER_ANY_DT=IDV.FIRST_ORDER_ONLINE_DT 
+                ) ID ON ID.IID=OH.IID
+where oh.brand_cd='UO' and oh.total_demand_amt>0 and oh.iid>0
+group by 1,2,3,4
+;
+--definfes lead and lag times to prior and next orders
+drop table fp_ejm_order_rank_2_1TIME if exists;
+create table fp_ejm_order_rank_2_1TIME as
+select
+        iid,
+        order_rank,
+        order_id,
+        order_dt,
+        LEAD(order_dt) OVER(PARTITION BY IID ORDER BY iid, order_rank) AS next_order,
+        LAG(order_dt) OVER(PARTITION BY IID ORDER BY IID, order_rank) AS prior_order,
+        (LEAD(order_dt) OVER(PARTITION BY IID ORDER BY iid, order_rank))-order_dt AS time_to_next_order,
+        order_dt-(LAG(order_dt) OVER(PARTITION BY IID ORDER BY IID, order_rank)) as time_since_prior_order--<<--THIS IS THE PRIOR 'CURRENT_MONTH_ID' IN WHICH THEY HAD A PURHCASE
+FROM ejm_fp_order_rank_1TIME
+group by 1,2,3,4
+;
+SELECT
+CASE 
+        WHEN NEXT_ORDER IS NULL THEN '1X'
+        WHEN NEXT_ORDER IS NOT NULL AND NEXT_ORDER-ORDER_DT<365 THEN 'UNDER 365 DAYS'
+        ELSE 'OVER 365' END AS NEXT_ORDER,
+COUNT(DISTINCT FO.IID)
+FROM fp_ejm_order_rank_2_1TIME FO
+        --JOIN URBN_TARGET..CALENDAR_HIERARCHY_V CH ON CH.CALENDAR_DT=FO.ORDER_DT
+WHERE FO.ORDER_RANK=1
+GROUP BY 1
+;
